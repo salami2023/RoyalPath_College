@@ -1,0 +1,6 @@
+{
+  "name": "RoyalPath",
+  "description": "A comprehensive school management system with roles for Admins, Teachers, and Parents, featuring secure role-based access, student lists, grades, attendance tracking, and class schedules.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

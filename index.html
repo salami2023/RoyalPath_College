@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RoyalPath College</title>
+    <link rel="icon" type="image/svg+xml" href="/src/assets/images/royalpath_logo.svg" />
+    <meta name="description" content="A comprehensive school management system with roles for Admins, Teachers, and Parents, featuring secure role-based access, student lists, grades, attendance tracking, and class schedules." />
+    <meta property="og:title" content="RoyalPath College" />
+    <meta property="og:description" content="A comprehensive school management system with roles for Admins, Teachers, and Parents, featuring secure role-based access, student lists, grades, attendance tracking, and class schedules." />
+    <script>
+      (function() {
+        function checkAndMock(type) {
+          try {
+            var storage = window[type];
+            var x = '__storage_test__';
+            storage.setItem(x, x);
+            storage.removeItem(x);
+          } catch (e) {
+            var mockStorage = {
+              _data: {},
+              setItem: function(id, val) { this._data[id] = String(val); },
+              getItem: function(id) { return this._data.hasOwnProperty(id) ? this._data[id] : null; },
+              removeItem: function(id) { delete this._data[id]; },
+              clear: function() { this._data = {}; },
+              get length() { return Object.keys(this._data).length; },
+              key: function(i) { return Object.keys(this._data)[i] || null; }
+            };
+            try {
+              Object.defineProperty(window, type, {
+                value: mockStorage,
+                writable: true,
+                configurable: true,
+                enumerable: true
+              });
+            } catch (err) {
+              window[type] = mockStorage;
+            }
+          }
+        }
+        checkAndMock('localStorage');
+        checkAndMock('sessionStorage');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,142 @@
+{
+  "entities": {
+    "User": {
+      "collection": "users",
+      "fields": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "fullName": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "permissions": { "type": "array" },
+        "password": { "type": "string" }
+      }
+    },
+    "Teacher": {
+      "collection": "teachers",
+      "fields": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "department": { "type": "string" },
+        "phone": { "type": "string" },
+        "subjects": { "type": "array" },
+        "status": { "type": "string" }
+      }
+    },
+    "Student": {
+      "collection": "students",
+      "fields": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "gradeLevel": { "type": "string" },
+        "parentId": { "type": "string" },
+        "rollNumber": { "type": "string" },
+        "birthDate": { "type": "string" },
+        "gender": { "type": "string" }
+      }
+    },
+    "Parent": {
+      "collection": "parents",
+      "fields": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "childIds": { "type": "array" }
+      }
+    },
+    "Class": {
+      "collection": "classes",
+      "fields": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "schedule": { "type": "string" },
+        "room": { "type": "string" },
+        "classFee": { "type": "number" },
+        "extraFee": { "type": "number" },
+        "promotionStatus": { "type": "string" },
+        "levelOfEducation": { "type": "string" }
+      }
+    },
+    "Enrollment": {
+      "collection": "enrollments",
+      "fields": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "classId": { "type": "string" }
+      }
+    },
+    "Grade": {
+      "collection": "grades",
+      "fields": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "classId": { "type": "string" },
+        "assignmentName": { "type": "string" },
+        "score": { "type": "number" },
+        "category": { "type": "string" },
+        "date": { "type": "string" },
+        "feedback": { "type": "string" },
+        "subjectName": { "type": "string" }
+      }
+    },
+    "Attendance": {
+      "collection": "attendance",
+      "fields": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "classId": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "ReportComment": {
+      "collection": "report_comments",
+      "fields": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "classId": { "type": "string" },
+        "term": { "type": "string" },
+        "teacherComment": { "type": "string" },
+        "principalComment": { "type": "string" }
+      }
+    },
+    "Test": {
+      "collection": "tests",
+      "fields": {
+        "id": { "type": "string" },
+        "classId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "maxScore": { "type": "number" },
+        "instructions": { "type": "string" },
+        "date": { "type": "string" }
+      }
+    },
+    "LessonNote": {
+      "collection": "lesson_notes",
+      "fields": {
+        "id": { "type": "string" },
+        "classId": { "type": "string" },
+        "topic": { "type": "string" },
+        "category": { "type": "string" },
+        "objectives": { "type": "string" },
+        "body": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "Setting": {
+      "collection": "settings",
+      "fields": {
+        "key": { "type": "string" },
+        "value": { "type": "string" }
+      }
+    }
+  }
+}
