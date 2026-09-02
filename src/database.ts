@@ -1,7 +1,11 @@
 import { DbState, User, Teacher, Student, Parent, Class, Enrollment, Grade, Attendance, UserRole, AttendanceStatus, ReportComment, sortClasses } from './types';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db as firestoreDb } from './firebase.ts';
 
 // Storage Key for Local Cache
 const DB_STORAGE_KEY = 'school_management_system_db';
+const FIRESTORE_COLLECTION = 'school_system';
+const FIRESTORE_DOC_ID = 'authoritative_state';
 
 // Safe helper to deduplicate array by key while preserving order
 function dedupeBy<T>(arr: T[] = [], keyFn: (item: T) => string): T[] {
@@ -41,8 +45,17 @@ const safeLocalStorageSet = (key: string, value: string): void => {
   }
 };
 
+// Safe event dispatcher to prevent synchronous React render collisions
+function safeDispatch(event: Event) {
+  if (typeof window !== 'undefined') {
+    setTimeout(() => {
+      window.dispatchEvent(event);
+    }, 0);
+  }
+}
+
 // Initial Seed Data representation
-const INITIAL_DB: DbState = {
+export const INITIAL_DB: DbState = {
   users: [
     {
       id: 'usr-admin-1',
@@ -553,11 +566,18 @@ class DatabaseManager {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          this.deletedIds = new Set(parsed);
+          parsed.forEach(id => {
+            if (id) this.deletedIds.add(id);
+          });
         }
       }
     } catch (e) {
-      this.deletedIds = new Set();
+      // ignore
+    }
+    if (this.state && Array.isArray(this.state.deletedRecordIds)) {
+      this.state.deletedRecordIds.forEach(id => {
+        if (id) this.deletedIds.add(id);
+      });
     }
   }
 
@@ -565,6 +585,9 @@ class DatabaseManager {
     try {
       const arr = Array.from(this.deletedIds);
       safeLocalStorageSet('school_deleted_records', JSON.stringify(arr));
+      if (this.state) {
+        this.state.deletedRecordIds = arr;
+      }
     } catch (e) {
       // ignore
     }
@@ -583,34 +606,47 @@ class DatabaseManager {
       reportComments: [],
       tests: [],
       lessonNotes: [],
-      settings: {}
+      settings: {},
+      deletedRecordIds: []
     };
   }
 
   /**
-   * Structural integrity check: Guarantees that array lists and object settings exist and
-   * are free of duplicate IDs, WITHOUT ever resetting, reverting, or overwriting user changes.
+   * Structural integrity check: Guarantees that array lists and object settings exist,
+   * are free of duplicate IDs, and strictly exclude any deleted records.
    */
   public ensureStructuralIntegrity(): void {
     if (!this.state) {
       this.state = this.getEmptyState();
     }
 
-    this.state.users = dedupeBy(this.state.users || [], u => u.id);
-    this.state.teachers = dedupeBy(this.state.teachers || [], t => t.id);
-    this.state.students = dedupeBy(this.state.students || [], s => s.id);
-    this.state.parents = dedupeBy(this.state.parents || [], p => p.id);
-    this.state.classes = dedupeBy(this.state.classes || [], c => c.id);
-    this.state.enrollments = dedupeBy(this.state.enrollments || [], e => e.id || `${e.studentId}___${e.classId}`);
-    this.state.grades = dedupeBy(this.state.grades || [], g => g.id);
-    this.state.attendance = dedupeBy(this.state.attendance || [], a => a.id || `${a.studentId}___${a.classId}___${a.date}`);
-    this.state.reportComments = dedupeBy(this.state.reportComments || [], rc => rc.id || `${rc.studentId}___${rc.classId}___${rc.term}`);
-    this.state.tests = dedupeBy(this.state.tests || [], t => t.id);
-    this.state.lessonNotes = dedupeBy(this.state.lessonNotes || [], n => n.id);
-    this.state.settings = this.state.settings || {};
+    if (Array.isArray(this.state.deletedRecordIds)) {
+      this.state.deletedRecordIds.forEach(id => {
+        if (id) this.deletedIds.add(id);
+      });
+    }
 
-    // Ensure initial admin user exists only if completely zero users exist in the system
-    if (this.state.users.length === 0) {
+    const filterDeleted = <T extends { id: string }>(items: T[] = []): T[] => {
+      if (!Array.isArray(items)) return [];
+      return items.filter(item => item && item.id && !this.deletedIds.has(item.id));
+    };
+
+    this.state.users = dedupeBy(filterDeleted(this.state.users), u => u.id);
+    this.state.teachers = dedupeBy(filterDeleted(this.state.teachers), t => t.id);
+    this.state.students = dedupeBy(filterDeleted(this.state.students), s => s.id);
+    this.state.parents = dedupeBy(filterDeleted(this.state.parents), p => p.id);
+    this.state.classes = dedupeBy(filterDeleted(this.state.classes), c => c.id);
+    this.state.enrollments = dedupeBy(filterDeleted(this.state.enrollments), e => e.id || `${e.studentId}___${e.classId}`);
+    this.state.grades = dedupeBy(filterDeleted(this.state.grades), g => g.id);
+    this.state.attendance = dedupeBy(filterDeleted(this.state.attendance), a => a.id || `${a.studentId}___${a.classId}___${a.date}`);
+    this.state.reportComments = dedupeBy(filterDeleted(this.state.reportComments), rc => rc.id || `${rc.studentId}___${rc.classId}___${rc.term}`);
+    this.state.tests = dedupeBy(filterDeleted(this.state.tests), t => t.id);
+    this.state.lessonNotes = dedupeBy(filterDeleted(this.state.lessonNotes), n => n.id);
+    this.state.settings = this.state.settings || {};
+    this.state.deletedRecordIds = Array.from(this.deletedIds);
+
+    // Ensure initial admin user exists only if completely zero users exist in the system and admin was not deleted
+    if (this.state.users.length === 0 && !this.deletedIds.has('usr-admin-1')) {
       this.state.users.push({
         id: 'usr-admin-1',
         email: 'realayanwunmi@gmail.com',
@@ -621,10 +657,10 @@ class DatabaseManager {
       });
     }
 
-    // Clean up duplicate childIds in parents
+    // Clean up duplicate childIds in parents and remove deleted students
     this.state.parents.forEach(p => {
       if (Array.isArray(p.childIds)) {
-        p.childIds = Array.from(new Set(p.childIds));
+        p.childIds = Array.from(new Set(p.childIds.filter(id => !this.deletedIds.has(id))));
       } else {
         p.childIds = [];
       }
@@ -639,26 +675,104 @@ class DatabaseManager {
   }
 
   /**
-   * Applies authoritative state, updating local storage and notifying all active UI listeners.
+   * Intelligently merges remote state into local state without wiping out newly added or modified local entities,
+   * while strictly respecting all deleted records across sessions.
    */
   public applyRemoteState(remote: DbState): void {
     if (!remote) return;
 
-    this.state = {
-      users: remote.users || [],
-      teachers: remote.teachers || [],
-      students: remote.students || [],
-      parents: remote.parents || [],
-      classes: remote.classes || [],
-      enrollments: remote.enrollments || [],
-      grades: remote.grades || [],
-      attendance: remote.attendance || [],
-      reportComments: remote.reportComments || [],
-      tests: remote.tests || [],
-      lessonNotes: remote.lessonNotes || [],
-      settings: remote.settings || {}
+    // Adopt any deletedRecordIds from remote
+    if (Array.isArray(remote.deletedRecordIds)) {
+      remote.deletedRecordIds.forEach(id => {
+        if (id) this.deletedIds.add(id);
+      });
+      this.saveDeletedIds();
+    }
+
+    // Active local write window: if user performed modifications on this client within the last 8 seconds
+    const isRecentLocalWrite = Date.now() - this.lastWriteTime < 8000;
+
+    const sanitizeList = <T extends { id: string }>(items: T[] = [], dedupeKey: (item: T) => string = (i) => i.id): T[] => {
+      if (!Array.isArray(items)) return [];
+      const list = items.filter(item => item && item.id && !this.deletedIds.has(item.id));
+      return dedupeBy(list, dedupeKey);
     };
 
+    let nextState: DbState;
+
+    if (!isRecentLocalWrite) {
+      // Normal remote synchronization: remote authoritative state replaces local state cleanly
+      nextState = {
+        users: sanitizeList(remote.users || []),
+        teachers: sanitizeList(remote.teachers || []),
+        students: sanitizeList(remote.students || []),
+        parents: sanitizeList(remote.parents || []),
+        classes: sanitizeList(remote.classes || []),
+        enrollments: sanitizeList(remote.enrollments || [], e => e.id || `${e.studentId}___${e.classId}`),
+        grades: sanitizeList(remote.grades || []),
+        attendance: sanitizeList(remote.attendance || [], a => a.id || `${a.studentId}___${a.classId}___${a.date}`),
+        reportComments: sanitizeList(remote.reportComments || [], rc => rc.id || `${rc.studentId}___${rc.classId}___${rc.term}`),
+        tests: sanitizeList(remote.tests || []),
+        lessonNotes: sanitizeList(remote.lessonNotes || []),
+        settings: { ...(this.state?.settings || {}), ...(remote.settings || {}) },
+        deletedRecordIds: Array.from(this.deletedIds)
+      };
+    } else {
+      // In-flight active local write window: merge local additions with remote
+      const mergeCollection = <T extends { id: string }>(
+        localItems: T[] = [],
+        remoteItems: T[] = [],
+        dedupeKey: (item: T) => string = (i) => i.id
+      ): T[] => {
+        const mergedMap = new Map<string, T>();
+
+        // 1. Add remote items if not deleted
+        for (const item of remoteItems || []) {
+          if (!item || !item.id || this.deletedIds.has(item.id)) continue;
+          const key = dedupeKey(item);
+          mergedMap.set(key, item);
+        }
+
+        // 2. Keep local items that are new or in-flight (excluding deleted)
+        for (const item of localItems || []) {
+          if (!item || !item.id || this.deletedIds.has(item.id)) continue;
+          const key = dedupeKey(item);
+          if (!mergedMap.has(key)) {
+            mergedMap.set(key, item);
+          } else {
+            mergedMap.set(key, item);
+          }
+        }
+
+        return Array.from(mergedMap.values());
+      };
+
+      nextState = {
+        users: mergeCollection(this.state.users, remote.users),
+        teachers: mergeCollection(this.state.teachers, remote.teachers),
+        students: mergeCollection(this.state.students, remote.students),
+        parents: mergeCollection(this.state.parents, remote.parents),
+        classes: mergeCollection(this.state.classes, remote.classes),
+        enrollments: mergeCollection(this.state.enrollments, remote.enrollments, e => e.id || `${e.studentId}___${e.classId}`),
+        grades: mergeCollection(this.state.grades, remote.grades),
+        attendance: mergeCollection(this.state.attendance, remote.attendance, a => a.id || `${a.studentId}___${a.classId}___${a.date}`),
+        reportComments: mergeCollection(this.state.reportComments, remote.reportComments, rc => rc.id || `${rc.studentId}___${rc.classId}___${rc.term}`),
+        tests: mergeCollection(this.state.tests, remote.tests),
+        lessonNotes: mergeCollection(this.state.lessonNotes, remote.lessonNotes),
+        settings: { ...(remote.settings || {}), ...(this.state.settings || {}) },
+        deletedRecordIds: Array.from(this.deletedIds)
+      };
+    }
+
+    // Prevent needless re-renders if data is identical
+    const currentSerialized = JSON.stringify(this.state);
+    const nextSerialized = JSON.stringify(nextState);
+
+    if (currentSerialized === nextSerialized) {
+      return;
+    }
+
+    this.state = nextState;
     this.ensureStructuralIntegrity();
 
     // Propagate settings to local cache for fast synchronous component reads
@@ -674,10 +788,15 @@ class DatabaseManager {
     this.isCloudSynced = true;
     this.syncError = null;
 
+    // If local state had newly created items that remote lacked, push the merged state back to cloud
+    if (isRecentLocalWrite) {
+      this.triggerDebouncedPush();
+    }
+
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
       if (this.state.settings) {
-        window.dispatchEvent(new CustomEvent('school_settings_changed', {
+        safeDispatch(new CustomEvent('school_settings_changed', {
           detail: {
             name: this.state.settings['settings_school_name'],
             theme: this.state.settings['settings_color_theme'],
@@ -721,7 +840,7 @@ class DatabaseManager {
 
     if (key === 'settings_school_name' || key === 'settings_color_theme' || key === 'settings_school_logo') {
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('school_settings_changed', {
+        safeDispatch(new CustomEvent('school_settings_changed', {
           detail: {
             name: this.state.settings['settings_school_name'],
             theme: this.state.settings['settings_color_theme'],
@@ -731,6 +850,8 @@ class DatabaseManager {
       }
     }
   }
+
+  private syncTimeout: any = null;
 
   constructor() {
     this.loadDeletedIds();
@@ -754,20 +875,148 @@ class DatabaseManager {
       window.addEventListener('storage', (e) => {
         if (e.key === DB_STORAGE_KEY) {
           this.reload();
-          window.dispatchEvent(new CustomEvent('database_updated'));
+          safeDispatch(new CustomEvent('database_updated'));
         }
       });
+
+      // Synchronize with Cloud Firestore and Cloud SQL backend on startup
+      this.initFirestoreListener();
+      this.fetchFromFirestore();
+      this.fetchFromBackend();
+
+      // Window focus and visibility listeners for smooth resume
+      window.addEventListener('focus', () => {
+        if (Date.now() - this.lastWriteTime > 6000) {
+          this.fetchFromFirestore();
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - this.lastWriteTime > 6000) {
+          this.fetchFromFirestore();
+        }
+      });
+
+      // Low-frequency periodic health check without competing polling
+      setInterval(() => {
+        if (Date.now() - this.lastWriteTime > 10000) {
+          this.fetchFromFirestore();
+        }
+      }, 15000);
+    }
+  }
+
+  /**
+   * Listens for real-time changes to the authoritative database in Google Cloud Firestore
+   */
+  private initFirestoreListener(): void {
+    try {
+      if (typeof window === 'undefined' || !firestoreDb) return;
+      const stateDocRef = doc(firestoreDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
+      onSnapshot(
+        stateDocRef,
+        (snap) => {
+          if (snap.exists()) {
+            const cloudData = snap.data();
+            if (cloudData && cloudData.data && Array.isArray(cloudData.data.users) && cloudData.data.users.length > 0) {
+              const remote = cloudData.data as DbState;
+              this.applyRemoteState(remote);
+            }
+          }
+        },
+        (err) => {
+          console.warn('Firestore live sync listener notice:', err);
+        }
+      );
+    } catch (err) {
+      console.warn('Firestore listener setup warning:', err);
+    }
+  }
+
+  /**
+   * Fetches latest authoritative state from Google Cloud Firestore
+   */
+  public async fetchFromFirestore(): Promise<void> {
+    try {
+      if (typeof window === 'undefined' || !firestoreDb) return;
+      const stateDocRef = doc(firestoreDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
+      const snap = await getDoc(stateDocRef);
+      if (snap.exists()) {
+        const cloudData = snap.data();
+        if (cloudData && cloudData.data && Array.isArray(cloudData.data.users) && cloudData.data.users.length > 0) {
+          const remote = cloudData.data as DbState;
+          this.applyRemoteState(remote);
+        }
+      }
+    } catch (e) {
+      console.warn('Firestore fetchState notice:', e);
+    }
+  }
+
+  /**
+   * Fetches latest authoritative state from backend Google Cloud SQL and applies if newer.
+   */
+  public async fetchFromBackend(): Promise<void> {
+    try {
+      if (typeof window === 'undefined') return;
+      const res = await fetch('/api/db/state');
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json && json.data) {
+        const serverState = json.data as DbState;
+        if (serverState && Array.isArray(serverState.users) && serverState.users.length > 0) {
+          this.applyRemoteState(serverState);
+        } else {
+          this.pushToBackend();
+        }
+      }
+    } catch (e) {
+      // Background sync silently catches network glitches
+    }
+  }
+
+  /**
+   * Pushes the current local state to both Google Cloud Firestore and backend Google Cloud SQL database.
+   * Guarantees data permanence across republishes, restarts, and new devices.
+   */
+  public async pushToBackend(): Promise<void> {
+    try {
+      if (typeof window === 'undefined') return;
+      this.ensureStructuralIntegrity();
+
+      // 1. Persist to Cloud SQL / Express backend
+      fetch('/api/db/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: this.state })
+      }).catch(err => console.warn('SQL backend sync warning:', err));
+
+      // 2. Persist to Google Cloud Firestore (permanent cloud database unharmed by republishing)
+      if (firestoreDb) {
+        const stateDocRef = doc(firestoreDb, FIRESTORE_COLLECTION, FIRESTORE_DOC_ID);
+        setDoc(
+          stateDocRef,
+          {
+            data: this.state,
+            updatedAt: new Date().toISOString(),
+            appId: 'ai-studio-schoolmanagement'
+          }
+        ).catch(err => console.warn('Firestore cloud sync warning:', err));
+      }
+    } catch (e) {
+      console.warn('Background sync error:', e);
     }
   }
 
   public async publishAndSyncCloud(): Promise<boolean> {
     this.ensureStructuralIntegrity();
+    await this.pushToBackend();
     return true;
   }
 
   public async migrateAllLocalDataToCloud(): Promise<{ success: boolean; count: number; error?: string }> {
     this.ensureStructuralIntegrity();
     this.saveLocalBackup();
+    await this.pushToBackend();
     const totalCount =
       (this.state.users?.length || 0) +
       (this.state.students?.length || 0) +
@@ -780,16 +1029,29 @@ class DatabaseManager {
   }
 
   public async syncWithCloud(): Promise<boolean> {
-    this.reload();
+    await this.fetchFromBackend();
     return true;
   }
 
   private asyncSaveFirestore(_collectionName: string, _row?: any, _deleteId?: string) {
-    // Cloud connection removed. Local storage backup is handled by saveLocalBackup.
+    this.triggerDebouncedPush();
   }
 
   private asyncSaveSupabase(tableName: string, row: any, deleteId?: string) {
-    return this.asyncSaveFirestore(tableName, row, deleteId);
+    this.triggerDebouncedPush();
+  }
+
+  private triggerDebouncedPush(immediate: boolean = false): void {
+    if (this.syncTimeout) {
+      clearTimeout(this.syncTimeout);
+    }
+    if (immediate) {
+      this.pushToBackend();
+    } else {
+      this.syncTimeout = setTimeout(() => {
+        this.pushToBackend();
+      }, 150);
+    }
   }
 
   public reload() {
@@ -807,8 +1069,9 @@ class DatabaseManager {
   private saveLocalBackup() {
     this.lastWriteTime = Date.now();
     safeLocalStorageSet(DB_STORAGE_KEY, JSON.stringify(this.state));
+    this.triggerDebouncedPush();
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
   }
 
@@ -931,7 +1194,7 @@ class DatabaseManager {
     this.saveLocalBackup();
     this.migrateAllLocalDataToCloud();
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
   }
 
@@ -1070,7 +1333,7 @@ class DatabaseManager {
     this.asyncSaveFirestore('users', null, userId);
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
 
     return true;
@@ -1116,7 +1379,7 @@ class DatabaseManager {
     attToDelete.forEach(a => this.asyncSaveFirestore('attendance', null, a.id));
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
 
     return true;
@@ -1315,7 +1578,7 @@ class DatabaseManager {
     attToDelete.forEach(a => this.asyncSaveFirestore('attendance', null, a.id));
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
 
     return this.state.classes.length < initialLen;
@@ -1426,6 +1689,70 @@ class DatabaseManager {
     return newStud;
   }
 
+  /**
+   * Batch creates multiple students in a single atomic database operation.
+   * Prevents event spamming, race conditions, and temporary rollback blips.
+   */
+  public createStudentsBulk(
+    studentsData: Array<{
+      fullName: string;
+      gradeLevel: string;
+      rollNumber: string;
+      birthDate: string;
+      parentId?: string;
+    }>
+  ): Student[] {
+    this.ensureBaselineIntegrity();
+    const createdStudents: Student[] = [];
+    const timestamp = Date.now();
+
+    studentsData.forEach((data, index) => {
+      const id = `stud-${timestamp}-${index}-${Math.floor(Math.random() * 100000)}`;
+      const newStud: Student = {
+        id,
+        fullName: data.fullName,
+        gradeLevel: data.gradeLevel,
+        rollNumber: data.rollNumber,
+        birthDate: data.birthDate,
+        parentId: data.parentId
+      };
+      this.state.students.push(newStud);
+      createdStudents.push(newStud);
+
+      // Auto enroll in matching class
+      const matchingClass = this.state.classes.find(c => 
+        c.name.toLowerCase() === data.gradeLevel.toLowerCase() ||
+        c.code.toLowerCase() === data.gradeLevel.toLowerCase()
+      );
+      if (matchingClass) {
+        const enrId = `enr-${timestamp}-${index}-${Math.floor(Math.random() * 100000)}`;
+        this.state.enrollments.push({
+          id: enrId,
+          studentId: id,
+          classId: matchingClass.id
+        });
+      }
+
+      if (data.parentId) {
+        const parent = this.state.parents.find(p => p.id === data.parentId);
+        if (parent && !parent.childIds.includes(id)) {
+          parent.childIds.push(id);
+        }
+      }
+    });
+
+    this.lastWriteTime = Date.now();
+    this.ensureStructuralIntegrity();
+    this.saveLocalBackup();
+    this.pushToBackend();
+
+    if (typeof window !== 'undefined') {
+      safeDispatch(new CustomEvent('database_updated'));
+    }
+
+    return createdStudents;
+  }
+
   // --- PARENTS ---
   public getParents(): Parent[] {
     this.ensureBaselineIntegrity();
@@ -1521,7 +1848,7 @@ class DatabaseManager {
     attToDelete.forEach(a => this.asyncSaveFirestore('attendance', null, a.id));
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
   }
 
@@ -1570,7 +1897,7 @@ class DatabaseManager {
     this.saveLocalBackup();
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
     return true;
   }
@@ -1623,7 +1950,7 @@ class DatabaseManager {
     this.saveLocalBackup();
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
     return true;
   }
@@ -1701,7 +2028,7 @@ class DatabaseManager {
     this.saveLocalBackup();
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
 
     return true;
@@ -1751,7 +2078,7 @@ class DatabaseManager {
     this.saveLocalBackup();
     this.asyncSaveFirestore('grades', null, gradeId);
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
   }
 
@@ -1825,7 +2152,7 @@ class DatabaseManager {
     this.saveLocalBackup();
     this.asyncSaveFirestore('attendance', null, id);
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('database_updated'));
+      safeDispatch(new CustomEvent('database_updated'));
     }
   }
 

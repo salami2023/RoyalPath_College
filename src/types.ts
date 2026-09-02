@@ -138,6 +138,7 @@ export interface DbState {
   tests?: any[];
   lessonNotes?: any[];
   settings?: Record<string, any>;
+  deletedRecordIds?: string[];
 }
 
 /**

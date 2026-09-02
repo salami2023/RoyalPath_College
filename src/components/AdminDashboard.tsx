@@ -4,7 +4,8 @@ import {
   Building, BookOpen, GraduationCap, Users, UserPlus, FolderPlus, 
   MapPin, Clock, Trash2, CheckCircle2, AlertCircle, Plus, Sparkles, User, Link2, LogOut,
   LayoutDashboard, ClipboardCheck, Award, CalendarPlus, Calendar, Search, HelpCircle, CheckSquare, PlusCircle, X,
-  Sliders, Info, Settings, Upload, Download, Globe, Phone, Mail, Image, ArrowLeft, ChevronDown, MoreHorizontal, Layers, Archive, Check, Edit3, TrendingUp, UserCheck, Lock, Save, FileSpreadsheet
+  Sliders, Info, Settings, Upload, Download, Globe, Phone, Mail, Image, ArrowLeft, ChevronDown, MoreHorizontal, Layers, Archive, Check, Edit3, TrendingUp, UserCheck, Lock, Save, FileSpreadsheet,
+  Database, FileJson, Server, Loader2
 } from 'lucide-react';
 import { Class, Teacher, Student, Parent, DbState, GradeCategory, AttendanceStatus, Attendance, Grade, getStoredLetterGrade, getStoredLetterColor, computeWeightedScore, User as PortalUser, AVAILABLE_ACADEMIC_SESSIONS } from '../types';
 import { db } from '../database';
@@ -14,6 +15,8 @@ import ProfileAvatarManager from './ProfileAvatarManager';
 import { PrintableReportModal } from './PrintableReportModal';
 import { ClassBroadsheetModal } from './ClassBroadsheetModal';
 import { StudentTranscriptModal } from './StudentTranscriptModal';
+import { ImportStudentsCSVModal } from './ImportStudentsCSVModal';
+import { ImportResultsCSVModal } from './ImportResultsCSVModal';
 
 export function getThemeColorClass(theme: string, type: 'bg_primary' | 'bg_light' | 'text_primary' | 'btn_primary' | 'border_light' | 'bullet' | 'accent_text' | 'bg_accent') {
   switch (theme) {
@@ -132,6 +135,10 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
   const [isBroadsheetModalOpen, setIsBroadsheetModalOpen] = useState(false);
   const [isTranscriptModalOpen, setIsTranscriptModalOpen] = useState(false);
   const [selectedTranscriptStudent, setSelectedTranscriptStudent] = useState<Student | null>(null);
+
+  // --- CSV IMPORT MODALS STATE ---
+  const [isImportStudentsModalOpen, setIsImportStudentsModalOpen] = useState(false);
+  const [isImportResultsModalOpen, setIsImportResultsModalOpen] = useState(false);
 
   const handleOpenBroadsheet = () => {
     if (currentUser.role !== 'admin') {
@@ -883,6 +890,116 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
     triggerToast(`Successfully downloaded ${filenamePrefix} as a CSV file!`);
   };
 
+  const handleExportStudentsCSV = () => {
+    const headers = [
+      'Student ID',
+      'Full Name',
+      'Roll Number',
+      'Grade Level / Class',
+      'Date of Birth',
+      'Gender',
+      'Parent / Guardian Name',
+      'Parent / Guardian Email',
+      'Parent Contact Phone',
+      'Classroom Enrollments Count'
+    ];
+
+    const rows = dbState.students.map(student => {
+      const parent = dbState.parents.find(p => p.id === student.parentId || (p.childIds && p.childIds.includes(student.id)));
+      const enrolledCount = dbState.enrollments.filter(e => e.studentId === student.id).length;
+      return [
+        student.id,
+        student.fullName,
+        student.rollNumber,
+        student.gradeLevel,
+        student.birthDate || 'N/A',
+        student.gender || 'Unspecified',
+        parent?.fullName || 'Unassigned',
+        parent?.email || 'N/A',
+        parent?.phone || 'N/A',
+        enrolledCount
+      ];
+    });
+
+    downloadCSV('students_directory_export', headers, rows);
+  };
+
+  const handleExportLedgerResultsCSV = () => {
+    if (!adminSelectedClass) {
+      triggerToast('Please select a classroom first to export the assessment ledger.', true);
+      return;
+    }
+
+    const headers = [
+      'Roll Number',
+      'Student Name',
+      'Class Name',
+      'Subject',
+      'Academic Term',
+      'Academic Session',
+      'Continuous Assessment 1 (20)',
+      'Mid-Term Assessment (20)',
+      'Notebook & Homework (20)',
+      'Terminal Examination (60)',
+      'Total Score (100)',
+      'Letter Grade',
+      'Standing'
+    ];
+
+    const rows = adminClassStudents.map(student => {
+      const studentGrades = dbState.grades.filter(g => 
+        g.studentId === student.id &&
+        g.classId === adminSelectedClass.id &&
+        (g.subjectName === adminResultsSelectedSubject || g.assignmentName.toLowerCase().includes(adminResultsSelectedSubject.toLowerCase())) &&
+        (g.term || '1st Term') === selectedResultsTerm &&
+        (g.session || '2025/2026') === selectedResultsSession
+      );
+
+      const ca1Grade = studentGrades.find(g => g.category === 'ca1' || g.assignmentName.toLowerCase().includes('continuous assessment 1') || g.assignmentName.toLowerCase().includes('ca1'));
+      const ca2Grade = studentGrades.find(g => g.category === 'notebook' || g.assignmentName.toLowerCase().includes('continuous assessment 2') || g.assignmentName.toLowerCase().includes('ca2'));
+      const midGrade = studentGrades.find(g => g.category === 'mid_term' || g.assignmentName.toLowerCase().includes('mid term') || g.assignmentName.toLowerCase().includes('midterm'));
+      const examGrade = studentGrades.find(g => g.category === 'exam' || g.category === 'final' || g.assignmentName.toLowerCase().includes('term end examination'));
+
+      const ca1Val = adminBulkGrades[student.id]?.ca1 !== undefined && adminBulkGrades[student.id]?.ca1 !== '' ? adminBulkGrades[student.id]?.ca1 : (ca1Grade ? String(ca1Grade.score) : '');
+      const ca2Val = adminBulkGrades[student.id]?.notebook !== undefined && adminBulkGrades[student.id]?.notebook !== '' ? adminBulkGrades[student.id]?.notebook : (ca2Grade ? String(ca2Grade.score) : '');
+      const midVal = adminBulkGrades[student.id]?.mid_term !== undefined && adminBulkGrades[student.id]?.mid_term !== '' ? adminBulkGrades[student.id]?.mid_term : (midGrade ? String(midGrade.score) : '');
+      const examVal = adminBulkGrades[student.id]?.exam !== undefined && adminBulkGrades[student.id]?.exam !== '' ? adminBulkGrades[student.id]?.exam : (examGrade ? String(examGrade.score) : '');
+
+      const nCa1 = parseFloat(ca1Val) || 0;
+      const nCa2 = parseFloat(ca2Val) || 0;
+      const nMid = parseFloat(midVal) || 0;
+      const nExam = parseFloat(examVal) || 0;
+
+      const hasAnyScore = ca1Val !== '' || ca2Val !== '' || midVal !== '' || examVal !== '';
+      const totalScore = hasAnyScore ? Math.min(100, Math.round(nCa1 + nCa2 + nMid + nExam)) : '';
+      const letterGrade = hasAnyScore ? getStoredLetterGrade(totalScore as number) : '-';
+      const standing = hasAnyScore ? ((totalScore as number) >= 50 ? 'Passed' : 'Needs Improvement') : 'Ungraded';
+
+      return [
+        student.rollNumber,
+        student.fullName,
+        adminSelectedClass.name,
+        adminResultsSelectedSubject,
+        selectedResultsTerm,
+        selectedResultsSession,
+        ca1Val !== '' ? ca1Val : '-',
+        midVal !== '' ? midVal : '-',
+        ca2Val !== '' ? ca2Val : '-',
+        examVal !== '' ? examVal : '-',
+        totalScore !== '' ? totalScore : '-',
+        letterGrade,
+        standing
+      ];
+    });
+
+    const cleanClass = adminSelectedClass.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const cleanSub = adminResultsSelectedSubject.replace(/[^a-zA-Z0-9]/g, '_');
+    const cleanTerm = selectedResultsTerm.replace(/[^a-zA-Z0-9]/g, '_');
+    const cleanSession = selectedResultsSession.replace(/[^a-zA-Z0-9]/g, '_');
+
+    downloadCSV(`results_ledger_${cleanClass}_${cleanSub}_${cleanTerm}_${cleanSession}`, headers, rows);
+  };
+
   const handleExportGradesCSV = () => {
     const headers = [
       'Student ID',
@@ -891,6 +1008,8 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
       'Class Name',
       'Class Code',
       'Subject Name', 
+      'Academic Term',
+      'Academic Session',
       'Category',
       'Assignment Name',
       'Score',
@@ -911,6 +1030,8 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
         classItem?.name || 'N/A',
         classItem?.code || 'N/A',
         subject,
+        grade.term || '1st Term',
+        grade.session || '2025/2026',
         grade.category,
         grade.assignmentName,
         grade.score,
@@ -920,7 +1041,7 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
       ];
     });
 
-    downloadCSV('student_grades_report', headers, rows);
+    downloadCSV('student_grades_registry_export', headers, rows);
   };
 
   const handleExportAttendanceCSV = () => {
@@ -1012,6 +1133,71 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
     });
 
     downloadCSV('teacher_recruitment_roster', headers, rows);
+  };
+
+  const [isExportingJson, setIsExportingJson] = useState(false);
+
+  const handleExportCloudSqlJSON = async () => {
+    try {
+      setIsExportingJson(true);
+      // Retrieve current state from Cloud SQL API or live database engine
+      let exportData: DbState = db.getRawData();
+      try {
+        const response = await fetch('/api/db/state');
+        if (response.ok) {
+          const jsonRes = await response.json();
+          if (jsonRes && jsonRes.data) {
+            exportData = jsonRes.data;
+          }
+        }
+      } catch (networkErr) {
+        console.warn('Using live in-memory state for Cloud SQL JSON export fallback:', networkErr);
+      }
+
+      const timestamp = new Date().toISOString();
+      const filenameDate = timestamp.replace(/[:.]/g, '-');
+      
+      const backupPayload = {
+        metadata: {
+          exportType: 'Full Cloud SQL Database Backup',
+          engine: 'PostgreSQL (Google Cloud SQL)',
+          region: 'europe-west2',
+          exportedAt: timestamp,
+          schoolName: settingsSchoolName || 'RoyalPath College',
+          version: '2.0',
+          recordCounts: {
+            users: exportData.users?.length || 0,
+            students: exportData.students?.length || 0,
+            teachers: exportData.teachers?.length || 0,
+            parents: exportData.parents?.length || 0,
+            classes: exportData.classes?.length || 0,
+            grades: exportData.grades?.length || 0,
+            attendance: exportData.attendance?.length || 0,
+            enrollments: exportData.enrollments?.length || 0,
+            settingsCount: Object.keys(exportData.settings || {}).length,
+          }
+        },
+        databaseState: exportData
+      };
+
+      const blob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `cloudsql_school_backup_${filenameDate}.json`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      triggerToast('Full Cloud SQL Database Backup (JSON) exported and downloaded successfully!');
+    } catch (err: any) {
+      console.error('Error exporting Cloud SQL JSON:', err);
+      triggerToast('Failed to export Cloud SQL database backup. Please try again.', true);
+    } finally {
+      setIsExportingJson(false);
+    }
   };
 
   // Pre-load attendance roster records when class or date triggers change
@@ -1242,72 +1428,6 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
       </div>
     );
   };
-
-  // Auto-seed typical classes from image if they don't exist yet
-  React.useEffect(() => {
-    const currentClasses = db.getAllClasses();
-    const hasImageClasses = currentClasses.some(c => c.name.toUpperCase().includes('BASIC 6') || c.name.toUpperCase().includes('JSS 1'));
-    const teachers = db.getTeachers();
-
-    if (teachers.length > 0) {
-      const t1 = teachers[0]?.id || '';
-      const t2 = teachers[1]?.id || t1;
-      const t3 = teachers[2]?.id || t1;
-
-      if (!hasImageClasses) {
-        // Reset existing default classes to match the design perfectly
-        currentClasses.forEach(c => {
-          db.deleteClass(c.id);
-        });
-
-        // Seed fresh exact classes (including B-stream and SS3 classes)
-        db.createClass('Basic 6', 'B6-101', t3, 'Mon, Wed, Fri 09:00 - 10:15', 'Room 101', 0, 0, 'Auto', 'Primary');
-        db.createClass('JSS 1', 'J1-101', t1, 'Mon, Wed, Fri 09:00 - 10:15', 'Room 102', 0, 0, 'Auto', 'Junior Secondary');
-        db.createClass('JSS 2', 'J2-101', t1, 'Mon, Wed, Fri 10:30 - 11:45', 'Room 103', 0, 0, 'Auto', 'Junior Secondary');
-        db.createClass('JSS 2B', 'J2-102', t1, 'Mon, Wed, Fri 11:00 - 12:15', 'Room 104', 0, 0, 'Auto', 'Junior Secondary');
-        db.createClass('JSS 3', 'J3-101', t2, 'Tue, Thu 09:00 - 10:15', 'Room 104', 0, 0, 'Auto', 'Junior Secondary');
-        db.createClass('JSS 3B', 'J3-102', t2, 'Tue, Thu 10:30 - 11:45', 'Room 105', 0, 0, 'Auto', 'Junior Secondary');
-        db.createClass('SSS 1', 'S1-101', t3, 'Tue, Thu 11:00 - 12:30', 'Room 201', 0, 0, 'Auto', 'Senior Secondary');
-        db.createClass('SSS 1B', 'S1-102', t3, 'Tue, Thu 13:00 - 14:30', 'Room 204', 0, 0, 'Auto', 'Senior Secondary');
-        db.createClass('SSS 2', 'S2-101', t1, 'Mon, Wed 13:00 - 14:30', 'Room 202', 0, 0, 'Auto', 'Senior Secondary');
-        db.createClass('SSS 2B', 'S2-102', t1, 'Mon, Wed 14:45 - 16:15', 'Room 205', 0, 0, 'Auto', 'Senior Secondary');
-        db.createClass('SS3A', 'SS3-A', t2, 'Tue, Thu 13:00 - 14:30', 'Room 206', 0, 0, 'Auto', 'Senior Secondary');
-        db.createClass('SS3B', 'SS3-B', t3, 'Tue, Thu 14:45 - 16:15', 'Room 207', 0, 0, 'Auto', 'Senior Secondary');
-
-        refreshState();
-      } else {
-        // For existing setups, ensure classes (JSS 3B, SSS 1B, SSS 2B, SS3A, SS3B) are dynamically appended if missing
-        let addedAny = false;
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'JSS 2B')) {
-          db.createClass('JSS 2B', 'J2-102', t1, 'Mon, Wed, Fri 11:00 - 12:15', 'Room 104', 0, 0, 'Auto', 'Junior Secondary');
-          addedAny = true;
-        }
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'JSS 3B')) {
-          db.createClass('JSS 3B', 'J3-102', t2, 'Tue, Thu 10:30 - 11:45', 'Room 105', 0, 0, 'Auto', 'Junior Secondary');
-          addedAny = true;
-        }
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'SSS 1B')) {
-          db.createClass('SSS 1B', 'S1-102', t3, 'Tue, Thu 13:00 - 14:30', 'Room 204', 0, 0, 'Auto', 'Senior Secondary');
-          addedAny = true;
-        }
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'SSS 2B')) {
-          db.createClass('SSS 2B', 'S2-102', t1, 'Mon, Wed 14:45 - 16:15', 'Room 205', 0, 0, 'Auto', 'Senior Secondary');
-          addedAny = true;
-        }
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'SS3A' || c.name.toUpperCase() === 'SSS 3A' || c.name.toUpperCase() === 'SSS 3')) {
-          db.createClass('SS3A', 'SS3-A', t2, 'Tue, Thu 13:00 - 14:30', 'Room 206', 0, 0, 'Auto', 'Senior Secondary');
-          addedAny = true;
-        }
-        if (!currentClasses.some(c => c.name.toUpperCase() === 'SS3B' || c.name.toUpperCase() === 'SSS 3B')) {
-          db.createClass('SS3B', 'SS3-B', t3, 'Tue, Thu 14:45 - 16:15', 'Room 207', 0, 0, 'Auto', 'Senior Secondary');
-          addedAny = true;
-        }
-        if (addedAny) {
-          refreshState();
-        }
-      }
-    }
-  }, [dbState.teachers, dbState.classes]);
 
   const handleBatchPromoteStudents = (sourceClassId: string, targetClassId: string, customStudentIds?: string[]) => {
     if (!sourceClassId || !targetClassId) {
@@ -2050,17 +2170,30 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
 
               {/* Data Portability & Backup Center */}
               <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
                   <div>
                     <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                      <Download className={`w-5 h-5 ${getThemeColorClass(settingsColorTheme, 'text_primary')}`} />
-                      <span>Data Portability & Offline Backups</span>
+                      <Database className={`w-5 h-5 ${getThemeColorClass(settingsColorTheme, 'text_primary')}`} />
+                      <span>Data Portability & Database Backups</span>
                     </h3>
-                    <p className="text-xs text-slate-400 mt-1">Prevent future data loss and retain control by exporting raw school records as download-ready CSV spreadsheets.</p>
+                    <p className="text-xs text-slate-400 mt-1">Export full Cloud SQL PostgreSQL database snapshots in JSON or download modular CSV spreadsheets.</p>
                   </div>
-                  <div className="flex items-center gap-1.5 self-start sm:self-center">
-                    <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full border border-slate-200/80">
-                      Standard CSV UTF-8
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleExportCloudSqlJSON}
+                      disabled={isExportingJson}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center gap-2 text-white shadow-sm transition-all cursor-pointer active:scale-95 disabled:opacity-50 ${getThemeColorClass(settingsColorTheme, 'btn_primary')}`}
+                    >
+                      {isExportingJson ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                      <span>{isExportingJson ? 'Exporting...' : 'Export Cloud SQL (JSON)'}</span>
+                    </button>
+                    <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2.5 py-1.5 rounded-full border border-slate-200/80">
+                      Cloud SQL europe-west2
                     </span>
                   </div>
                 </div>
@@ -2865,6 +2998,26 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
                     
                     <div className="flex flex-wrap items-center gap-3">
                       <button
+                        onClick={() => setIsImportResultsModalOpen(true)}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-full text-xs sm:text-sm shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                        id="admin_import_results_overview_btn"
+                        title="Import continuous assessment and examination results from CSV file"
+                      >
+                        <Upload className="w-4 h-4 text-white" />
+                        <span>Import Results (CSV)</span>
+                      </button>
+
+                      <button
+                        onClick={handleExportGradesCSV}
+                        className="px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200 font-extrabold rounded-full text-xs sm:text-sm shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                        id="admin_export_results_overview_btn"
+                        title="Export all grades and score registry to CSV file"
+                      >
+                        <Download className="w-4 h-4 text-slate-500" />
+                        <span>Export Results (CSV)</span>
+                      </button>
+
+                      <button
                         onClick={() => setResultsSubView('settings')}
                         className="px-5 py-2.5 bg-[#404ce5] hover:bg-indigo-700 text-white font-extrabold rounded-full text-xs sm:text-sm shadow-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
                       >
@@ -3059,6 +3212,36 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2.5">
+                      {/* IMPORT RESULTS CSV BUTTON */}
+                      <button
+                        type="button"
+                        onClick={() => setIsImportResultsModalOpen(true)}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 shadow-sm hover:shadow-md transition-all cursor-pointer"
+                        id="import_results_ledger_btn"
+                        title="Import assessment marks and examination scores from CSV spreadsheet"
+                      >
+                        <Upload className="w-4 h-4" />
+                        <div className="text-left leading-tight">
+                          <span className="block font-black">Import Results (CSV)</span>
+                          <span className="text-[9px] text-indigo-100 font-medium">Batch Marks & Exam Upload</span>
+                        </div>
+                      </button>
+
+                      {/* EXPORT CURRENT LEDGER CSV BUTTON */}
+                      <button
+                        type="button"
+                        onClick={handleExportLedgerResultsCSV}
+                        className="bg-slate-700 hover:bg-slate-800 text-white font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 shadow-sm hover:shadow-md transition-all cursor-pointer"
+                        id="export_current_ledger_csv_btn"
+                        title="Export current classroom subject assessment ledger to CSV spreadsheet"
+                      >
+                        <Download className="w-4 h-4 text-slate-200" />
+                        <div className="text-left leading-tight">
+                          <span className="block font-black">Export Ledger (CSV)</span>
+                          <span className="text-[9px] text-slate-300 font-medium">{adminSelectedClass?.name || 'Class'} • {adminResultsSelectedSubject}</span>
+                        </div>
+                      </button>
+
                       {/* ADMIN EXCLUSIVE: DOWNLOAD BROADSHEET BUTTON */}
                       <button
                         type="button"
@@ -3409,27 +3592,51 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
                       </div>
                     </div>
 
-                    <div className="flex justify-end items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAdminBulkGradesRefreshTrigger(prev => prev + 1);
-                          triggerToast('Spreadsheet reset to stored registry state.');
-                        }}
-                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
-                        id="reset_admin_spreadsheet_btn"
-                      >
-                        Reset Local Changes
-                      </button>
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => setIsImportResultsModalOpen(true)}
+                          className="w-full sm:w-auto bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                          id="ledger_bottom_import_csv_btn"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Import CSV Spreadsheet</span>
+                        </button>
 
-                      <button
-                        type="submit"
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold px-6 py-2.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2"
-                        id="save_admin_spreadsheet_btn"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        <span>Save Spreadsheet Changes to Database</span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={handleExportLedgerResultsCSV}
+                          className="w-full sm:w-auto bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                          id="ledger_bottom_export_csv_btn"
+                        >
+                          <Download className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Export CSV Ledger</span>
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAdminBulkGradesRefreshTrigger(prev => prev + 1);
+                            triggerToast('Spreadsheet reset to stored registry state.');
+                          }}
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+                          id="reset_admin_spreadsheet_btn"
+                        >
+                          Reset Local Changes
+                        </button>
+
+                        <button
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold px-6 py-2.5 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-2"
+                          id="save_admin_spreadsheet_btn"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Save Spreadsheet Changes to Database</span>
+                        </button>
+                      </div>
                     </div>
                   </form>
                 </div>
@@ -4923,9 +5130,33 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
               
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pb-4">
                 <div className="lg:col-span-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 font-sans">
-                  <div className="flex items-center gap-2 mb-4">
-                    <FolderPlus className="w-4 h-4 text-indigo-600" />
-                    <h3 className="text-sm font-bold text-slate-800">Add Student Record</h3>
+                  <div className="flex items-center justify-between gap-2 mb-4">
+                    <div className="flex items-center gap-2">
+                      <FolderPlus className="w-4 h-4 text-indigo-600" />
+                      <h3 className="text-sm font-bold text-slate-800">Add Student Record</h3>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsImportStudentsModalOpen(true)}
+                        className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-3xs"
+                        id="quick_import_students_csv_btn"
+                        title="Bulk import students via CSV spreadsheet"
+                      >
+                        <Upload className="w-3 h-3" />
+                        <span>Import</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExportStudentsCSV}
+                        className="text-[11px] font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-3xs"
+                        id="quick_export_students_csv_btn"
+                        title="Export registered students to CSV spreadsheet"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Export</span>
+                      </button>
+                    </div>
                   </div>
                   <form onSubmit={handleCreateStudent} className="space-y-4">
                     <div>
@@ -4986,7 +5217,7 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
                       </select>
                     </div>
                     <button 
-                      type="submit"
+                      type="submit" 
                       className="w-full bg-indigo-600 text-white font-semibold py-2.5 rounded-xl text-xs sm:text-sm hover:bg-indigo-750 transition-colors flex items-center justify-center gap-2 cursor-pointer mt-2"
                     >
                       <Plus className="w-4 h-4" />
@@ -4999,26 +5230,50 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
                     <div>
                       <h3 className="text-base font-bold text-slate-800">Student Directory</h3>
-                      <p className="text-[11px] text-slate-400 mt-0.5">Search and view information for registered students</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Search, export, and manage registered students</p>
                     </div>
-                    <div className="relative max-w-xs w-full sm:w-64">
-                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        placeholder="Search by name, roll, level, parent..."
-                        value={studentDirectorySearchQuery}
-                        onChange={(e) => setStudentDirectorySearchQuery(e.target.value)}
-                        className="w-full pl-9 pr-8 py-2 bg-white border border-slate-200 focus:border-indigo-500 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden transition-all duration-200"
-                      />
-                      {studentDirectorySearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setStudentDirectorySearchQuery('')}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full hover:bg-slate-100 transition-colors"
-                        >
-                          ✕
-                        </button>
-                      )}
+                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => setIsImportStudentsModalOpen(true)}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-3 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer shrink-0"
+                        id="import_students_directory_btn"
+                        title="Import bulk student admissions via CSV spreadsheet"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Import CSV</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleExportStudentsCSV}
+                        className="bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200 font-extrabold px-3 py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer shrink-0"
+                        id="export_students_directory_btn"
+                        title="Export student directory to CSV spreadsheet"
+                      >
+                        <Download className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Export CSV</span>
+                      </button>
+
+                      <div className="relative flex-1 sm:w-52 min-w-[150px]">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Search by name, roll..."
+                          value={studentDirectorySearchQuery}
+                          onChange={(e) => setStudentDirectorySearchQuery(e.target.value)}
+                          className="w-full pl-9 pr-8 py-2 bg-white border border-slate-200 focus:border-indigo-500 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden transition-all duration-200"
+                        />
+                        {studentDirectorySearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setStudentDirectorySearchQuery('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full hover:bg-slate-100 transition-colors"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="overflow-x-auto">
@@ -6179,80 +6434,128 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
               <div className="bg-white rounded-3xl border border-slate-100 shadow-xs p-6 md:p-8 space-y-6 animate-slide-in">
                 <div>
                   <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                    <Download className={`w-5 h-5 ${getThemeColorClass(settingsColorTheme, 'text_primary')}`} />
-                    <span>Administrative Backup & Export Utilities</span>
+                    <Database className={`w-5 h-5 ${getThemeColorClass(settingsColorTheme, 'text_primary')}`} />
+                    <span>Administrative Backup & Cloud SQL Export Utilities</span>
                   </h3>
-                  <p className="text-xs text-slate-400 mt-1">Download immediate CSV formatting files of critical database tables to secure local offline copies and mitigate risk of unexpected data loss.</p>
+                  <p className="text-xs text-slate-400 mt-1">Download immediate JSON snapshots of the complete Cloud SQL database or export modular CSV files for offline backups and disaster recovery.</p>
+                </div>
+
+                {/* Primary Full Cloud SQL JSON Backup Hero Banner */}
+                <div className="bg-linear-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-6 rounded-2xl border border-slate-800 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        <Server className="w-5 h-5" />
+                      </span>
+                      <div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                          <span>Complete Cloud SQL Database Backup</span>
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                            PostgreSQL europe-west2
+                          </span>
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          Exports all records (Users, Students, Teachers, Parents, Classes, Grades, Attendance, Enrollments, and Settings) into a formatted <code className="text-emerald-400 font-mono text-[11px]">.json</code> backup archive.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[10px] text-slate-300 font-mono pt-1">
+                      <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700">Users: {dbState.users.length}</span>
+                      <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700">Students: {dbState.students.length}</span>
+                      <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700">Classes: {dbState.classes.length}</span>
+                      <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700">Grades: {dbState.grades.length}</span>
+                      <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700">Attendance: {dbState.attendance.length}</span>
+                    </div>
+                  </div>
+
+                  <div className="self-stretch md:self-center shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleExportCloudSqlJSON}
+                      disabled={isExportingJson}
+                      className="w-full md:w-auto px-5 py-3 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center gap-2 shadow-lg hover:shadow-emerald-500/20 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
+                    >
+                      {isExportingJson ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                      <span>{isExportingJson ? 'Exporting Cloud SQL JSON...' : 'Download Full Backup (.json)'}</span>
+                    </button>
+                  </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleExportGradesCSV}
-                    className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="p-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 group-hover:bg-emerald-105 group-hover:bg-emerald-100 transition-colors">
-                        <Award className="w-4 h-4" />
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.grades.length} items</span>
-                    </div>
-                    <div className="pt-2">
-                      <h4 className="text-xs font-bold text-slate-805">Student Grades</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Continuous assessment lists, midterms, exam scores, and teacher comments.</p>
-                    </div>
-                  </button>
+                <div className="pt-2">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Modular CSV Spreadsheet Exports</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <button
+                      type="button"
+                      onClick={handleExportGradesCSV}
+                      className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="p-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 group-hover:bg-emerald-105 group-hover:bg-emerald-100 transition-colors">
+                          <Award className="w-4 h-4" />
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.grades.length} items</span>
+                      </div>
+                      <div className="pt-2">
+                        <h4 className="text-xs font-bold text-slate-805">Student Grades</h4>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Continuous assessment lists, midterms, exam scores, and teacher comments.</p>
+                      </div>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={handleExportAttendanceCSV}
-                    className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="p-2 rounded-xl bg-sky-50 text-sky-700 border border-sky-100 group-hover:bg-sky-105 group-hover:bg-sky-100 transition-colors">
-                        <ClipboardCheck className="w-4 h-4" />
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.attendance.length} items</span>
-                    </div>
-                    <div className="pt-2">
-                      <h4 className="text-xs font-bold text-slate-805">Attendance Database</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Historical logs of classroom roll-calls, student statuses, and notes.</p>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={handleExportAttendanceCSV}
+                      className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="p-2 rounded-xl bg-sky-50 text-sky-700 border border-sky-100 group-hover:bg-sky-105 group-hover:bg-sky-100 transition-colors">
+                          <ClipboardCheck className="w-4 h-4" />
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.attendance.length} items</span>
+                      </div>
+                      <div className="pt-2">
+                        <h4 className="text-xs font-bold text-slate-805">Attendance Database</h4>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Historical logs of classroom roll-calls, student statuses, and notes.</p>
+                      </div>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={handleExportEnrollmentCSV}
-                    className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="p-2 rounded-xl bg-violet-50 text-violet-700 border border-violet-100 group-hover:bg-violet-105 group-hover:bg-violet-100 transition-colors">
-                        <Layers className="w-4 h-4" />
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.enrollments.length} items</span>
-                    </div>
-                    <div className="pt-2">
-                      <h4 className="text-xs font-bold text-slate-805">Student Enrolment</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Active class schedules, room placements, and student registries.</p>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={handleExportEnrollmentCSV}
+                      className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="p-2 rounded-xl bg-violet-50 text-violet-700 border border-violet-100 group-hover:bg-violet-105 group-hover:bg-violet-100 transition-colors">
+                          <Layers className="w-4 h-4" />
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.enrollments.length} items</span>
+                      </div>
+                      <div className="pt-2">
+                        <h4 className="text-xs font-bold text-slate-805">Student Enrolment</h4>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Active class schedules, room placements, and student registries.</p>
+                      </div>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={handleExportTeachersCSV}
-                    className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="p-2 rounded-xl bg-teal-50 text-teal-700 border border-teal-100 group-hover:bg-teal-105 group-hover:bg-teal-100 transition-colors">
-                        <Users className="w-4 h-4" />
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.teachers.length} items</span>
-                    </div>
-                    <div className="pt-2">
-                      <h4 className="text-xs font-bold text-slate-850">Teacher Recruitment</h4>
-                      <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Staff directories, emails, department catalogs, and assigned scopes.</p>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={handleExportTeachersCSV}
+                      className="p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/50 hover:border-slate-300 rounded-2xl text-left transition-all space-y-3 cursor-pointer group flex flex-col justify-between h-full"
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="p-2 rounded-xl bg-teal-50 text-teal-700 border border-teal-100 group-hover:bg-teal-105 group-hover:bg-teal-100 transition-colors">
+                          <Users className="w-4 h-4" />
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">{dbState.teachers.length} items</span>
+                      </div>
+                      <div className="pt-2">
+                        <h4 className="text-xs font-bold text-slate-850">Teacher Recruitment</h4>
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">Staff directories, emails, department catalogs, and assigned scopes.</p>
+                      </div>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -7764,6 +8067,33 @@ export default function AdminDashboard({ currentUser, adminId, adminName, onLogo
             />
           )}
         </AnimatePresence>
+
+        {/* CSV Import Students Modal */}
+        <ImportStudentsCSVModal
+          isOpen={isImportStudentsModalOpen}
+          onClose={() => setIsImportStudentsModalOpen(false)}
+          onSuccess={(count) => {
+            setDbState(db.getRawData());
+            triggerToast(`Successfully imported and registered ${count} student${count === 1 ? '' : 's'} via CSV.`);
+          }}
+          dbState={dbState}
+        />
+
+        {/* CSV Import Results Modal */}
+        <ImportResultsCSVModal
+          isOpen={isImportResultsModalOpen}
+          onClose={() => setIsImportResultsModalOpen(false)}
+          onSuccess={(count) => {
+            setDbState(db.getRawData());
+            setAdminBulkGradesRefreshTrigger(prev => prev + 1);
+            triggerToast(`Successfully ingested and saved ${count} grade record${count === 1 ? '' : 's'} via CSV.`);
+          }}
+          dbState={dbState}
+          defaultClassId={adminSelectedClass?.id}
+          defaultSubject={adminResultsSelectedSubject}
+          defaultTerm={selectedResultsTerm}
+          defaultSession={selectedResultsSession}
+        />
 
         {/* Universal Confirmation Modal Overlay */}
         <AnimatePresence>

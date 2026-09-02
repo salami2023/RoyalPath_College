@@ -5,7 +5,6 @@ import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import TeacherDashboard from './components/TeacherDashboard';
 import ParentDashboard from './components/ParentDashboard';
-import DevDatabaseViewer from './components/DevDatabaseViewer';
 import { db } from './database';
 import { SchoolLogo, ROYALPATH_LOGO_DATA_URL } from './assets/logo';
 import royalPathLogo from './assets/images/royalpath_logo.svg';
@@ -22,13 +21,17 @@ export default function App() {
     const handleSettingsChange = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail) {
-        if (customEvent.detail.name) setSchoolName(customEvent.detail.name);
-        if (customEvent.detail.theme) setColorTheme(customEvent.detail.theme);
-        setSchoolLogo(customEvent.detail.logo || '');
+        setTimeout(() => {
+          if (customEvent.detail.name) setSchoolName(customEvent.detail.name);
+          if (customEvent.detail.theme) setColorTheme(customEvent.detail.theme);
+          setSchoolLogo(customEvent.detail.logo || '');
+        }, 0);
       }
     };
     const handleDbUpdate = () => {
-      setRefreshKey(prev => prev + 1);
+      setTimeout(() => {
+        setRefreshKey(prev => prev + 1);
+      }, 0);
     };
     window.addEventListener('school_settings_changed', handleSettingsChange);
     window.addEventListener('database_updated', handleDbUpdate);
@@ -49,7 +52,12 @@ export default function App() {
         // double check user is still valid in db simulator
         const validUser = db.getRawData().users.find(dbu => dbu.email === u.email);
         if (validUser) {
-          setCurrentUser(validUser);
+          setCurrentUser(prev => {
+            if (prev && prev.id === validUser.id && prev.avatarUrl === validUser.avatarUrl && prev.fullName === validUser.fullName && prev.role === validUser.role) {
+              return prev;
+            }
+            return validUser;
+          });
         }
       } catch (err) {
         localStorage.removeItem('school_portal_user_session');
@@ -69,22 +77,23 @@ export default function App() {
   };
 
   const forceAppRefresh = () => {
-    // Triggers full state reload on reset
-    setRefreshKey(prev => prev + 1);
-    const rawUser = localStorage.getItem('school_portal_user_session');
-    if (rawUser) {
-      try {
-        const u = JSON.parse(rawUser);
-        const validUser = db.getRawData().users.find(dbu => dbu.email === u.email);
-        if (!validUser) {
+    setTimeout(() => {
+      setRefreshKey(prev => prev + 1);
+      const rawUser = localStorage.getItem('school_portal_user_session');
+      if (rawUser) {
+        try {
+          const u = JSON.parse(rawUser);
+          const validUser = db.getRawData().users.find(dbu => dbu.email === u.email);
+          if (!validUser) {
+            setCurrentUser(null);
+          } else {
+            setCurrentUser(validUser);
+          }
+        } catch (e) {
           setCurrentUser(null);
-        } else {
-          setCurrentUser(validUser);
         }
-      } catch (e) {
-        setCurrentUser(null);
       }
-    }
+    }, 0);
   };
 
   const renderDashboardByRole = () => {
@@ -199,14 +208,11 @@ export default function App() {
           </div>
           <div>
             <p className="font-mono text-[10px] text-slate-400">
-              Vite SPA Sandbox • Local Schema Authentication Enabled
+              Vite Cloud SQL Synced • Europe-West2 Enterprise Database
             </p>
           </div>
         </div>
       </footer>
-
-      {/* Floating Developer SQL Database inspect tools */}
-      <DevDatabaseViewer onRefreshParentApp={forceAppRefresh} />
 
     </div>
   );
